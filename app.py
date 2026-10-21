@@ -1,5 +1,6 @@
 import os
 import io
+import zipfile
 import requests
 from bs4 import BeautifulSoup
 from PIL import Image
@@ -42,7 +43,6 @@ if submitted:
                         if src.startswith('//'):
                             src = 'https:' + src
                         elif src.startswith('/'):
-                            # Xử lý đường dẫn tương đối
                             from urllib.parse import urlparse
                             parsed_uri = urlparse(url_input)
                             src = f"{parsed_uri.scheme}://{parsed_uri.netloc}{src}"
@@ -64,7 +64,6 @@ if submitted:
                             if img_res.status_code == 200:
                                 img = Image.open(io.BytesIO(img_res.content))
                                 w, h = img.size
-                                # Chỉ lấy các ảnh có kích thước đủ lớn (bỏ qua icon/banner quảng cáo)
                                 if h >= min_height_filter and w >= 200:
                                     valid_images.append(img.convert("RGB"))
                         except:
@@ -101,28 +100,51 @@ if submitted:
                         if current_chunk:
                             chunks.append(current_chunk)
 
-                        # Hiển thị và cung cấp nút tải về từng dải ảnh
+                        # --- TẠO FILE ZIP ĐỂ TẢI TẤT CẢ ---
+                        zip_buffer = io.BytesIO()
+                        processed_pages = []
+
+                        with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+                            for idx, chunk in enumerate(chunks, 1):
+                                total_h = sum(img.height for img in chunk)
+                                combined_img = Image.new("RGB", (desired_width, total_h))
+                                
+                                y_offset = 0
+                                for img in chunk:
+                                    combined_img.paste(img, (0, y_offset))
+                                    y_offset += img.height
+
+                                # Chuyển ảnh thành dữ liệu byte
+                                img_buf = io.BytesIO()
+                                combined_img.save(img_buf, format="JPEG", quality=95)
+                                byte_data = img_buf.getvalue()
+
+                                # Thêm vào danh sách hiển thị
+                                processed_pages.append((idx, desired_width, total_h, byte_data))
+
+                                # Đưa ảnh vào file ZIP
+                                file_name_in_zip = f"manga_page_{idx:02d}.jpg"
+                                zip_file.writestr(file_name_in_zip, byte_data)
+
+                        # NÚT TẢI TẤT CẢ (FILE ZIP)
                         st.subheader("🎉 Kết quả xử lý")
-                        
-                        for idx, chunk in enumerate(chunks, 1):
-                            total_h = sum(img.height for img in chunk)
-                            combined_img = Image.new("RGB", (desired_width, total_h))
-                            
-                            y_offset = 0
-                            for img in chunk:
-                                combined_img.paste(img, (0, y_offset))
-                                y_offset += img.height
+                        st.download_button(
+                            label="📦 TẢI TẤT CẢ TRANG (FILE .ZIP)",
+                            data=zip_buffer.getvalue(),
+                            file_name="manga_chapter_full.zip",
+                            mime="application/zip",
+                            type="primary",
+                            use_container_width=True
+                        )
+                        st.markdown("---")
 
-                            # Chuyển ảnh ghép thành Bytes để lưu/tải
-                            buf = io.BytesIO()
-                            combined_img.save(buf, format="JPEG", quality=95)
-                            byte_im = buf.getvalue()
-
-                            st.write(f"**Trang {idx}** (Kích thước: {desired_width}x{total_h}px)")
+                        # HIỂN THỊ TỪNG TRANG & NÚT TẢI TỪNG TRANG NẾU CẦN
+                        for idx, width, height, byte_im in processed_pages:
+                            st.write(f"**Trang {idx}** (Kích thước: {width}x{height}px)")
                             st.image(byte_im, use_container_width=True)
                             
                             st.download_button(
-                                label=f"⬇️ Tải Trang {idx} về máy",
+                                label=f"⬇️ Tải lẻ Trang {idx}",
                                 data=byte_im,
                                 file_name=f"manga_page_{idx:02d}.jpg",
                                 mime="image/jpeg",
